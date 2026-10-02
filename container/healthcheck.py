@@ -4,16 +4,29 @@ import os
 import socket
 import sys
 import time
+import json
 import urllib.request
+
+# never use a proxy for loopback checks
+OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
 port = os.environ.get("SHIM_PORT", "27123")
 errs = []
 try:
-    urllib.request.urlopen(f"http://127.0.0.1:{port}/healthz", timeout=3).read()
+    OPENER.open(f"http://127.0.0.1:{port}/healthz", timeout=3).read()
 except Exception as e:
     errs.append(f"shim: {e}")
 try:
-    socket.create_connection(("127.0.0.1", int(os.environ.get("BM_PORT", "8000"))), 3).close()
+    # real round trip: an MCP initialize against BM (not just "port open")
+    url = os.environ.get("BM_MCP_URL") or f"http://127.0.0.1:{os.environ.get('BM_PORT', '8000')}/mcp"
+    req = urllib.request.Request(url, method="POST", data=json.dumps({
+        "jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
+            "protocolVersion": "2025-03-26", "capabilities": {},
+            "clientInfo": {"name": "healthcheck", "version": "1"}}}).encode(),
+        headers={"Content-Type": "application/json", "Accept": "application/json, text/event-stream"})
+    body = OPENER.open(req, timeout=5).read().decode("utf-8", "replace")
+    if '"result"' not in body:
+        errs.append(f"basic-memory: bad initialize reply: {body[:120]}")
 except Exception as e:
     errs.append(f"basic-memory: {e}")
 try:

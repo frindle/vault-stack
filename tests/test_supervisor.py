@@ -32,6 +32,67 @@ class TestSupervisor(unittest.TestCase):
         self.addCleanup(lambda: p.poll() is None and p.kill())
         return p
 
+    def test_token_dir_or_missing_or_empty_refuses_to_start(self):
+        with tempfile.TemporaryDirectory() as d:
+            empty = os.path.join(d, "empty")
+            open(empty, "w").write("\n")
+            good = os.path.join(d, "good")
+            open(good, "w").write("tok\n")
+            for path, label in ((d, "DIRECTORY"), (os.path.join(d, "nope"), "missing"), (empty, "empty")):
+                p = self.run_sup([sleeper("a", 5)], VAULT_TOKEN_FILE=path, TOKEN_EXIT_DELAY="0")
+                err = p.communicate(timeout=20)[1]
+                self.assertEqual(p.returncode, 78, (label, err))
+                self.assertIn(label, err)
+                self.assertIn("openssl rand -hex 32 > secrets/vault_token", err)
+                self.assertNotIn("started a", err)
+            p = self.run_sup([sleeper("a", 1)], VAULT_TOKEN_FILE=good, TOKEN_EXIT_DELAY="0")
+            self.assertIn("started a", p.communicate(timeout=20)[1])
+
+    def _load(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("sup_under_test", SUP)
+        m = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(m)
+        return m
+
+    def test_unreadable_token_and_unwritable_dirs_give_exact_fix(self):
+        from unittest import mock
+        m = self._load()
+        with tempfile.TemporaryDirectory() as d:
+            tok = os.path.join(d, "tok")
+            open(tok, "w").write("secret\n")
+            env = {"VAULT_TOKEN_FILE": tok, "BASIC_MEMORY_CONFIG_DIR": d, "VAULT_ROOT": d,
+                   "COMMITTER_REMOTE": os.path.join(d, "backup", "vault.git")}
+            os.makedirs(os.path.join(d, "backup"))
+            self.assertEqual(m.preflight(env), [])
+            real = os.access
+            # simulate "owned by root, 0600/0755, container runs as another uid"
+            with mock.patch.object(m.os, "access", lambda p, mode: False if str(p).startswith(d) else real(p, mode)), \
+                 mock.patch.object(m.os, "getuid", lambda: 99), mock.patch.object(m.os, "getgid", lambda: 100):
+                got = m.preflight(env)
+            text = " | ".join(f"{w} || {f}" for w, f, _ in got)
+            self.assertIn("NOT READABLE by uid 99:100", text)
+            self.assertIn("chown 99:100 secrets/vault_token && chmod 400 secrets/vault_token", text)
+            self.assertIn("chown -R 99:100 <APPDATA_DIR>", text)
+            self.assertIn("chown -R 99:100 <VAULT_DIR>", text)
+            self.assertIn("chown -R 99:100 <BACKUP_DIR>", text)
+            fatal = {w.split()[0] for w, _, f in got if f}
+            self.assertNotIn(os.path.join(d, "backup"), fatal)
+            self.assertEqual([f for w, _, f in got if "backup dir" in w], [False])  # backup is a warning only
+
+    def test_unreadable_token_refuses_to_start(self):
+        # end to end: a token the supervisor cannot read -> exit 78 before any child starts
+        if os.getuid() == 0:
+            self.skipTest("root bypasses file permissions; covered by the mocked test")
+        with tempfile.TemporaryDirectory() as d:
+            tok = os.path.join(d, "tok")
+            open(tok, "w").write("secret\n")
+            os.chmod(tok, 0)
+            p = self.run_sup([sleeper("a", 5)], VAULT_TOKEN_FILE=tok, TOKEN_EXIT_DELAY="0")
+            err = p.communicate(timeout=20)[1]
+            self.assertEqual(p.returncode, 78, err)
+            self.assertIn("NOT READABLE", err)
+
     def test_any_child_death_exits_nonzero_and_kills_the_rest(self):
         with tempfile.TemporaryDirectory() as d:
             pidf = os.path.join(d, "pid")

@@ -36,7 +36,7 @@ services:
       - ${APPDATA_DIR:-/mnt/user/appdata/basic-memory}:/config
       - ${VAULT_DIR:-/mnt/user/data/Documents/Vault}:/vault
       - ${BACKUP_DIR:-/mnt/user/appdata/basic-memory/backup}:/backup
-      - ./secrets/vault_token:/run/secrets/vault_token:ro        # one line; chmod 644; NEVER commit
+      - ./secrets/vault_token:/run/secrets/vault_token:ro        # one line; chown 99:100 + chmod 400; NEVER commit
       - ./config/blocked_tools.txt:/etc/vault-stack/blocked_tools.txt:ro   # edit to relax; re-read on change
     healthcheck:                   # shim + Basic Memory + committer heartbeat
       test: ["CMD", "python3", "/app/healthcheck.py"]

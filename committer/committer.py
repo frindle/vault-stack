@@ -73,7 +73,13 @@ def ensure_repo(cfg):
         with open(excl, "a") as fh:
             fh.write("\n".join(missing) + "\n")
     if cfg.remote:
-        ensure_remote(cfg)
+        try:
+            ensure_remote(cfg)
+        except Exception as e:  # an unusable backup must not stop local commits (or loop forever)
+            log(f"WARNING: backup remote {cfg.remote} unusable ({e}); continuing with LOCAL commits only, "
+                f"no push. Fix: make the backup dir writable by uid {os.getuid()} (e.g. chown 99:100) and restart the container")
+            cfg.remote = ""
+            os.environ["COMMITTER_REMOTE"] = ""  # staleness alarm must not expect pushes either
 
 
 def ensure_remote(cfg):
@@ -81,8 +87,10 @@ def ensure_remote(cfg):
         raise RuntimeError(f"COMMITTER_REMOTE {cfg.remote!r} looks invalid")
     if cfg.remote.startswith("/") and not os.path.exists(cfg.remote):
         os.makedirs(os.path.dirname(cfg.remote), exist_ok=True)
-        subprocess.run(["git", "init", "-q", "--bare", "-b", cfg.branch, cfg.remote], check=True,
-                       capture_output=True)
+        p = subprocess.run(["git", "init", "-q", "--bare", "-b", cfg.branch, cfg.remote],
+                           capture_output=True, text=True)
+        if p.returncode != 0:
+            raise RuntimeError(f"git init --bare {cfg.remote} -> {p.returncode}: {p.stderr.strip()[:300]}")
         log(f"created bare backup repo {cfg.remote}")
     cur = git(cfg, "remote", "get-url", "backup", check=False)
     if cur.returncode != 0:

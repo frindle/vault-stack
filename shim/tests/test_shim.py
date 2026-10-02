@@ -344,6 +344,31 @@ class TestBMProxy(Base):
         self.assertEqual(s, 200)
         self.assertEqual(json.loads(d)[0]["filename"], "Claude/a.md")
 
+    def test_search_ignores_proxy_env(self):
+        keys = ["HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy", "HTTPS_PROXY", "https_proxy"]
+        drop = ["NO_PROXY", "no_proxy"]
+        saved = {k: os.environ.get(k) for k in keys + drop}
+        try:
+            for k in drop:
+                os.environ.pop(k, None)
+            for k in keys:
+                os.environ[k] = "http://proxy.invalid.example:3128"
+            s, d, _ = self.req("POST", "/search/simple/?query=snip", b"")
+            self.assertEqual(s, 200, d)
+            self.assertEqual(json.loads(d)[0]["filename"], "Claude/a.md")
+        finally:
+            for k, v in saved.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
+
+    def test_unreachable_error_names_real_cause(self):
+        bm = vs.BMClient("http://127.0.0.1:1/mcp", timeout=1, retries=0, backoff=0.01)
+        with self.assertRaises(vs.BMError) as cm:
+            bm.call("search_notes", {"query": "x"})
+        self.assertIn("127.0.0.1:1", str(cm.exception))
+
     def test_search_sse(self):
         FakeBM.sse = True
         s, d, _ = self.req("POST", "/search/simple/?query=snip", b"")

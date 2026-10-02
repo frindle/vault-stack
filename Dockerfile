@@ -11,6 +11,7 @@ ENV PYTHONUNBUFFERED=1 HOME=/tmp/home \
     BM_HOST=127.0.0.1 BM_PORT=8000 BM_MCP_URL=http://127.0.0.1:8000/mcp \
     SHIM_BIND=0.0.0.0 SHIM_PORT=27123 VAULT_TOKEN_FILE=/run/secrets/vault_token \
     BLOCKED_TOOLS_FILE=/etc/vault-stack/blocked_tools.txt \
+    NO_PROXY=127.0.0.1,localhost no_proxy=127.0.0.1,localhost \
     WATCHFILES_FORCE_POLLING=1 WATCHFILES_POLL_DELAY_MS=3000
 COPY bm/drift_guard.py bm/make_bmignore.py bm/entrypoint.sh /opt/vault-stack/
 COPY config/config.json /opt/vault-stack/config.json

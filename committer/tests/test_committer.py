@@ -119,6 +119,22 @@ class TestPush(Base):
         cm.commit_if_dirty(self.cfg)
         self.assertEqual(cm.push_if_needed(self.cfg), "pushed")
 
+    def test_unusable_backup_degrades_to_local_commits(self):
+        blocker = os.path.join(self.tmp.name, "afile")
+        open(blocker, "w").write("x")
+        self.env["COMMITTER_REMOTE"] = os.path.join(blocker, "vault.git")  # parent is a file: cannot be created
+        cfg = cm.Cfg(self.env)
+        os.environ["COMMITTER_REMOTE"] = self.env["COMMITTER_REMOTE"]
+        try:
+            cm.ensure_repo(cfg)  # must NOT raise
+            self.assertEqual(cfg.remote, "")
+            self.assertEqual(os.environ["COMMITTER_REMOTE"], "")
+        finally:
+            os.environ.pop("COMMITTER_REMOTE", None)
+        self.write("a.md")
+        self.assertEqual(cm.commit_if_dirty(cfg), "committed")
+        self.assertEqual(cm.push_if_needed(cfg), "no-remote")
+
     def test_failed_push_retried(self):
         self.write("a.md")
         cm.commit_if_dirty(self.cfg)

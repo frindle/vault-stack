@@ -667,6 +667,11 @@ class BMError(Exception):
         self.retryable = retryable
 
 
+# Loopback calls must NEVER go through a proxy: a stray HTTP_PROXY/ALL_PROXY (Docker/Unraid can inject
+# one) would make urllib resolve the proxy host instead of talking to 127.0.0.1.
+_LOOPBACK_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+
 class BMClient:
     """Minimal MCP streamable-http client (initialize / tools/call).
 
@@ -684,7 +689,7 @@ class BMClient:
         if sid:
             hdr["mcp-session-id"] = sid
         req = urllib.request.Request(self.url, data=json.dumps(payload).encode(), headers=hdr, method="POST")
-        with urllib.request.urlopen(req, timeout=self.timeout) as r:
+        with _LOOPBACK_OPENER.open(req, timeout=self.timeout) as r:
             body = r.read().decode("utf-8", "replace")
             ctype = r.headers.get("Content-Type", "")
             return r.headers.get("mcp-session-id"), ctype, body
@@ -747,7 +752,7 @@ class BMClient:
                         raise BMError(f"BM HTTP {e.code}", retryable=e.code >= 500)
                 except (urllib.error.URLError, OSError, TimeoutError) as e:
                     self._sid = None
-                    raise BMError(f"BM unreachable: {e}", retryable=True)
+                    raise BMError(f"BM unreachable ({self.url}): {type(e).__name__}: {e}", retryable=True)
         if not msg:
             raise BMError("empty BM response", retryable=True)
         if "error" in msg:

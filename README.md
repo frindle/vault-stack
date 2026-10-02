@@ -32,6 +32,7 @@ atomically under a per-path lock; BM just indexes them ~1-2 s later), a 2 MB per
 | `bm/entrypoint.sh`, `bm/drift_guard.py`, `bm/make_bmignore.py` | drift guard, oversize-file ignore |
 | `shim/vault_shim.py` + `shim/tests/` | REST writer (30 tests) |
 | `committer/committer.py`, `committer/staleness.py` + tests | commit/push loop, staleness alarm (16 tests) |
+| `scripts/prepare.sh` | one-shot host prep: .env, folders, token, ownership |
 | `tests/` | drift-guard (9) + supervisor (4) tests, `revert_tests.py`, `integration_bm.py` (real BM), `supervised_check.py` (real supervisor + BM + shim + committer, no docker), `run_all.sh` |
 
 ## Where things live (Unraid)
@@ -42,22 +43,26 @@ atomically under a per-path lock; BM just indexes them ~1-2 s later), a 2 MB per
 | **The notes (vault folder)** | `/mnt/user/data/Documents/Vault` (any folder; set `VAULT_DIR`) | **your data**, so it stays on the data share; mount ONLY this folder, never its parent |
 
 ## Install on Unraid
-1. **Folders**
+Quick path (root shell on the Unraid host):
+```sh
+git clone <this-repo-url> /mnt/user/appdata/vault-stack && cd /mnt/user/appdata/vault-stack
+./scripts/prepare.sh        # creates .env, the folders, secrets/vault_token (never printed) and chowns everything to 99:100
+nano .env                   # set VAULT_IP and VAULT_MAC (see step 3)
+docker compose up -d --build
+```
+`prepare.sh` is safe to re-run. The same steps by hand:
+1. **Folders, owned by the container user (`PUID:PGID`, default 99:100), BEFORE the first `docker compose up`**
    ```sh
-   mkdir -p /mnt/user/appdata/basic-memory/state /mnt/user/appdata/basic-memory/backup
-   mkdir -p /mnt/user/data/Documents/Vault
-   chown -R nobody:users /mnt/user/appdata/basic-memory /mnt/user/data/Documents/Vault
+   mkdir -p /mnt/user/appdata/basic-memory/state /mnt/user/appdata/basic-memory/backup /mnt/user/data/Documents/Vault
+   chown -R 99:100 /mnt/user/appdata/basic-memory /mnt/user/data/Documents/Vault
    ```
-2. **Clone the stack into appdata**
+2. **Clone the stack into appdata**: `git clone <this-repo-url> /mnt/user/appdata/vault-stack && cd /mnt/user/appdata/vault-stack`
+3. **Token** (never committed; `secrets/` is git-ignored). Create it BEFORE the first `docker compose up`, or Docker makes a *directory* at that path:
    ```sh
-   git clone <this-repo-url> /mnt/user/appdata/vault-stack
-   cd /mnt/user/appdata/vault-stack
+   mkdir -p secrets && (umask 077; openssl rand -hex 32 > secrets/vault_token) && chown 99:100 secrets/vault_token && chmod 400 secrets/vault_token
    ```
-3. **Token** (never committed; `secrets/` is git-ignored):
-   ```sh
-   mkdir -p secrets && umask 022 && openssl rand -hex 32 > secrets/vault_token && chmod 644 secrets/vault_token
-   ```
-   Give the same token to your clients (e.g. a file in `~/.config/` with mode 600). Never put it in argv or a repo.
+   The container runs as 99:100, so the file must be readable by that uid (a root-owned 0600 file is not). Give the same token to your
+   clients (e.g. a file in `~/.config/` with mode 600). Never put it in argv or a repo.
 4. **Import your notes** into the vault folder *before* first start (see "Importing an existing vault").
 5. **Configure.** Confirm the macvlan exists: `docker network ls | grep br0`. Then `cp .env.example .env` and set `VAULT_IP` / `VAULT_MAC`
    (compose refuses to start without them): a free address on your LAN (check with `ping` and `arp -a`; it must not be in your DHCP range) and a
@@ -68,6 +73,7 @@ atomically under a per-path lock; BM just indexes them ~1-2 s later), a 2 MB per
    docker compose ps                 # "vault" Up, healthy after ~2-3 min
    docker logs vault | head -30      # must show "drift guard: config ok" and 3 supervisor "started" lines
    ```
+   If a token or folder is not usable by the container's uid, the supervisor refuses to start and logs `REFUSING TO START: ... FIX: <exact command>`.
 7. **Check** from ANOTHER machine on the LAN (the Unraid host itself cannot reach a macvlan container's IP):
    ```sh
    T=$(cat ~/.config/vault/token); U=http://<VAULT_IP>:27123     # your token file / IP
@@ -166,6 +172,14 @@ HEALTHCHECK (`healthcheck.py`): shim `/healthz`, BM port on loopback, committer 
 4. Optional history: `git clone <your-existing-backup-remote> /mnt/user/data/Documents/Vault` first, then copy files over it; the committer continues that history.
 5. Start the stack and run the checks above; `git status` must be clean (proves the safe config rewrote nothing).
 6. If you open the folder in Obsidian.app over SMB, do not enable plugins that rewrite files.
+
+## Troubleshooting
+* **Container restarts with "REFUSING TO START: ..."** (token missing/empty/a directory/not readable by uid 99, or the state/vault folder not writable; the log line gives the exact `chown` fix; `./scripts/prepare.sh` does all of it; a directory at `secrets/vault_token` means it was missing when compose first ran): the token file did not exist
+  when compose first ran, so Docker created a *directory* there. Fix: `rm -rf secrets/vault_token && ./scripts/prepare.sh && docker compose up -d`. Always create the token **before** the first `docker compose up`.
+* **Committer logs "WARNING: backup remote ... unusable"**: the `/backup` mount is not writable by uid 99. The stack keeps committing locally but does not push.
+  Fix: `mkdir -p <BACKUP_DIR> && chown 99:100 <BACKUP_DIR>` (default `/mnt/user/appdata/basic-memory/backup`), then restart. The log line carries git's real stderr.
+* **`/search/simple/` returns 502 "BM unreachable"**: the message now includes the real cause. Loopback calls ignore `HTTP_PROXY`/`ALL_PROXY`
+  (and the image sets `NO_PROXY=127.0.0.1,localhost`); the healthcheck does a real Basic Memory round trip, so a broken BM shows as `unhealthy`.
 
 ## Tests
 `tests/run_all.sh` (stdlib only). Set `BM_BIN` to a `basic-memory==0.23.2` binary (Linux, py3.12 venv) to include the real-BM integration and the
