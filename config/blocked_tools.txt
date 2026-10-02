@@ -1,0 +1,10 @@
+# BM MCP tools refused at the edge (tools/call -> JSON-RPC error). One tool name per line.
+# BM's write tools lose ~85% of concurrent writes while reporting success (trial 2026-10-01);
+# all writes must go through the shim REST verbs (PUT/POST-append/PATCH/DELETE, /_move, /_copy).
+# Remove a line (and restart the shim, or just wait: the file is re-read on change) to relax.
+write_note
+edit_note
+delete_note
+move_note
+create_memory_project
+delete_project

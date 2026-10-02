@@ -1,0 +1,50 @@
+# vault-stack: ONE container (Basic Memory + write shim + committer under a tiny supervisor) on Unraid's
+# external br0 macvlan with its own IP/MAC (own IP/MAC, like any macvlan container). No other docker network, no published ports.
+#
+#   :27123 on VAULT_IP  authenticated Obsidian-compatible REST + /mcp (BM MCP behind token + write-tool block)
+#   127.0.0.1:8000      Basic Memory (no auth) -- loopback inside the container, unreachable from the LAN
+#
+# Unraid: /mnt/user/appdata/basic-memory -> /config  (BM config.json, SQLite index, .bmignore, state/)
+#         /mnt/user/data/Documents/Vault -> /vault   (THE VAULT: plain markdown + .git; ONLY this subfolder is mounted)
+# The Unraid host itself cannot reach a macvlan container's IP: test from another LAN machine or `docker exec`.
+name: vault-stack
+
+services:
+  vault:
+    build: .
+    image: vault-stack/vault:1
+    container_name: vault
+    restart: unless-stopped        # supervisor exits non-zero if any process dies -> container restarts
+    user: "${PUID:-99}:${PGID:-100}"    # nobody:users, so files stay editable over SMB
+    mac_address: "${VAULT_MAC:?set VAULT_MAC in .env}"
+    networks:
+      br0:
+        ipv4_address: ${VAULT_IP:?set VAULT_IP in .env}      # THE host address; VAULT_URL=http://${VAULT_IP}:27123
+    environment:
+      MAX_NOTE_BYTES: "2097152"
+      SETTLE_S: "6"                # re-touch mtime after 6 s quiet so BM re-indexes the final state of a write burst
+      VAULT_UMASK: "000"
+      COMMIT_INTERVAL_S: "60"
+      COMMIT_DEBOUNCE_S: "15"
+      STALE_AFTER_S: "21600"
+      DRIFT_EXIT_DELAY: "30"
+      DRIFT_RECHECK_S: "60"
+      COMMITTER_BRANCH: main
+      # Optional bare backup remote: path inside the container (auto-created) or an ssh/https URL. Empty = no push.
+      COMMITTER_REMOTE: ${COMMITTER_REMOTE:-}
+    volumes:
+      - ${APPDATA_DIR:-/mnt/user/appdata/basic-memory}:/config
+      - ${VAULT_DIR:-/mnt/user/data/Documents/Vault}:/vault
+      - ${BACKUP_DIR:-/mnt/user/appdata/basic-memory/backup}:/backup
+      - ./secrets/vault_token:/run/secrets/vault_token:ro        # one line; chmod 644; NEVER commit
+      - ./config/blocked_tools.txt:/etc/vault-stack/blocked_tools.txt:ro   # edit to relax; re-read on change
+    healthcheck:                   # shim + Basic Memory + committer heartbeat
+      test: ["CMD", "python3", "/app/healthcheck.py"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 180s
+
+networks:
+  br0:
+    external: true       # Unraid's macvlan; must already exist (`docker network ls | grep br0`)

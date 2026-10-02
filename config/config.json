@@ -1,0 +1,19 @@
+{
+  "env": "user",
+  "projects": {
+    "main": {
+      "path": "/vault",
+      "mode": "local"
+    }
+  },
+  "default_project": "main",
+  "ensure_frontmatter_on_sync": false,
+  "disable_permalinks": true,
+  "semantic_search_enabled": false,
+  "format_on_save": false,
+  "update_permalinks_on_move": false,
+  "kebab_filenames": false,
+  "auto_update": false,
+  "cloud_promo_opt_out": true,
+  "log_level": "INFO"
+}
